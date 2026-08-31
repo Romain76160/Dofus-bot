@@ -7,10 +7,11 @@ from app.api.network import router as network_router
 from app.api.vision import router as vision_router
 from app.api.ws import router as ws_router
 from app.config import settings
+from app.observer.network.service import network_event_service
 from app.state.models import Observation
 from app.state.store import store
 
-app = FastAPI(title="Dofus Hybrid Observer", version="0.6.0")
+app = FastAPI(title="Dofus Hybrid Observer", version="0.7.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,12 +31,14 @@ app.include_router(diagnostics_router)
 @app.get("/health")
 async def health() -> dict:
     diagnostics = await store.diagnostics()
+    live_capture = await network_event_service.live_capture_status()
     return {
         "status": "ok",
-        "version": "0.6.0",
+        "version": "0.7.0",
         "vision_enabled": settings.vision_enabled,
         "network_observer_enabled": settings.network_observer_enabled,
         "allow_input": settings.allow_input,
+        "live_capture_active": live_capture.active,
         "stale_fields": diagnostics["stale_fields"],
         "conflict_count": diagnostics["conflict_count"],
     }

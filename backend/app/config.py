@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     network_history_size: int = 100
     observation_history_size: int = 200
     conflict_history_size: int = 100
+    live_capture_heartbeat_ttl_seconds: float = Field(default=7.0, gt=1.0)
     state_stale_after_seconds: float = Field(default=15.0, gt=0)
     source_priority_penalty: float = Field(default=0.15, ge=0.0, le=1.0)
     state_source_priority: dict[str, list[SourceName]] = Field(

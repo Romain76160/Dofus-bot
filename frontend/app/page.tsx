@@ -48,13 +48,39 @@ type NetworkDebug = {
   ambiguous_candidates: number;
 };
 
+type LiveCaptureStatus = {
+  active: boolean;
+  session_id: string | null;
+  server_host: string | null;
+  resolved_addresses: string[];
+  server_port: number | null;
+  capture_filter: string | null;
+  capture_mode: string | null;
+  platform: string | null;
+  tool_version: string | null;
+  started_at: string | null;
+  reported_at: string | null;
+  last_heartbeat_at: string | null;
+  heartbeat_age_seconds: number | null;
+  packets_seen: number;
+  payload_packets: number;
+  chunks_forwarded: number;
+  bytes_forwarded: number;
+  duplicates_skipped: number;
+  queue_drops: number;
+  forward_errors: number;
+  last_error: string | null;
+};
+
 type NetworkStatus = {
   enabled: boolean;
   profile_build: string;
   decoded_ingest_enabled: boolean;
+  raw_replay_enabled: boolean;
   messages_seen: number;
   history_size: number;
   layouts: Record<string, unknown>;
+  live_capture: LiveCaptureStatus;
 };
 
 type GameDataStatus = {
@@ -152,7 +178,7 @@ const initialDebug: NetworkDebug = {
   ambiguous_candidates: 0,
 };
 
-function relativeTime(iso: string): string {
+function relativeTime(iso: string | null): string {
   if (!iso) return "jamais";
   const ms = Date.now() - new Date(iso).getTime();
   if (!Number.isFinite(ms) || ms < 0) return "maintenant";
@@ -162,6 +188,12 @@ function relativeTime(iso: string): string {
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return "il y a " + minutes + " min";
   return new Date(iso).toLocaleTimeString();
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return value + " B";
+  if (value < 1024 * 1024) return (value / 1024).toFixed(1) + " KiB";
+  return (value / (1024 * 1024)).toFixed(1) + " MiB";
 }
 
 function displayValue(value: unknown): string {
@@ -346,16 +378,17 @@ export default function Home() {
     : [];
   const fieldHealth = health ? Object.entries(health.fields) : [];
   const sourceHealth = health ? Object.entries(health.sources) : [];
+  const live = network?.live_capture;
 
   return (
     <main className="shell">
       <header className="topbar">
         <div>
-          <span className="kicker">DOFUS HYBRID OBSERVER · v0.6</span>
+          <span className="kicker">DOFUS HYBRID OBSERVER · v0.7</span>
           <h1>Diagnostic temps réel</h1>
           <p>
-            Réseau décodé + profil brut + données locales + vision ciblée +
-            fusion multi-source.
+            Capture TCP live + réseau décodé + données locales + vision ciblée
+            + fusion multi-source.
           </p>
         </div>
         <div className={connected ? "connection online" : "connection"}>
@@ -382,34 +415,65 @@ export default function Home() {
       <section className="statusGrid">
         <article className="panel">
           <div className="panelHeader">
-            <h2>Sources</h2>
-            <span className="badge">lecture seule</span>
+            <h2>Capture TCP live</h2>
+            <span className={live?.active ? "badge badgeOnline" : "badge"}>
+              {live?.active ? "ACTIVE" : "INACTIVE"}
+            </span>
           </div>
           <div className="rows">
             <div>
-              <span>Profil réseau brut</span>
-              <b>{network?.profile_build ?? "non chargé"}</b>
+              <span>Cible</span>
+              <b>
+                {live?.server_host ??
+                  live?.resolved_addresses?.[0] ??
+                  "non configurée"}
+                {live?.server_port ? ":" + live.server_port : ""}
+              </b>
             </div>
             <div>
-              <span>Ingestion JSON décodée</span>
-              <b>{network?.decoded_ingest_enabled ? "prête" : "inactive"}</b>
+              <span>Mode</span>
+              <b>{live?.capture_mode ?? "—"}</b>
             </div>
             <div>
-              <span>maps.sqlite</span>
-              <b>{gameData?.map_interactions_ready ? "prête" : "absente"}</b>
+              <span>Heartbeat</span>
+              <b>
+                {live?.heartbeat_age_seconds === null ||
+                live?.heartbeat_age_seconds === undefined
+                  ? "—"
+                  : live.heartbeat_age_seconds.toFixed(1) + " s"}
+              </b>
             </div>
             <div>
-              <span>Maps indexées</span>
-              <b>{gameData?.map_count ?? 0}</b>
+              <span>Paquets / payloads</span>
+              <b>
+                {live?.packets_seen ?? 0} / {live?.payload_packets ?? 0}
+              </b>
             </div>
             <div>
-              <span>Fenêtre Dofus</span>
-              <b>{vision?.window_found ? "détectée" : "introuvable"}</b>
+              <span>Chunks transmis</span>
+              <b>{live?.chunks_forwarded ?? 0}</b>
             </div>
             <div>
-              <span>Capture bureau complet</span>
-              <b>{vision?.full_desktop_fallback ? "autorisée" : "bloquée"}</b>
+              <span>Volume transmis</span>
+              <b>{formatBytes(live?.bytes_forwarded ?? 0)}</b>
             </div>
+            <div>
+              <span>Retransmissions ignorées</span>
+              <b>{live?.duplicates_skipped ?? 0}</b>
+            </div>
+            <div>
+              <span>Drops file / erreurs</span>
+              <b>
+                {live?.queue_drops ?? 0} / {live?.forward_errors ?? 0}
+              </b>
+            </div>
+          </div>
+          {live?.last_error ? (
+            <div className="inlineError">{live.last_error}</div>
+          ) : null}
+          <div className="filterPreview">
+            <span>Filtre WinDivert</span>
+            <code>{live?.capture_filter ?? "aucune session live"}</code>
           </div>
         </article>
 
@@ -419,6 +483,10 @@ export default function Home() {
             <span className="badge">{debug.messages_seen} messages</span>
           </div>
           <div className="rows compact">
+            <div>
+              <span>Profil brut</span>
+              <b>{network?.profile_build ?? "non chargé"}</b>
+            </div>
             <div>
               <span>Direction</span>
               <b>{debug.last_direction}</b>
@@ -466,6 +534,39 @@ export default function Home() {
       <section className="statusGrid">
         <article className="panel">
           <div className="panelHeader">
+            <h2>Sources auxiliaires</h2>
+            <span className="badge">lecture seule</span>
+          </div>
+          <div className="rows">
+            <div>
+              <span>Replay brut batch</span>
+              <b>{network?.raw_replay_enabled ? "prêt" : "inactif"}</b>
+            </div>
+            <div>
+              <span>Ingestion JSON décodée</span>
+              <b>{network?.decoded_ingest_enabled ? "prête" : "inactive"}</b>
+            </div>
+            <div>
+              <span>maps.sqlite</span>
+              <b>{gameData?.map_interactions_ready ? "prête" : "absente"}</b>
+            </div>
+            <div>
+              <span>Maps indexées</span>
+              <b>{gameData?.map_count ?? 0}</b>
+            </div>
+            <div>
+              <span>Fenêtre Dofus</span>
+              <b>{vision?.window_found ? "détectée" : "introuvable"}</b>
+            </div>
+            <div>
+              <span>Capture bureau complet</span>
+              <b>{vision?.full_desktop_fallback ? "autorisée" : "bloquée"}</b>
+            </div>
+          </div>
+        </article>
+
+        <article className="panel">
+          <div className="panelHeader">
             <h2>Fraîcheur des champs</h2>
             <span className="badge">
               seuil {health?.stale_after_seconds ?? "—"} s
@@ -503,7 +604,9 @@ export default function Home() {
             ))}
           </div>
         </article>
+      </section>
 
+      <section className="statusGrid">
         <article className="panel">
           <div className="panelHeader">
             <h2>Contradictions multi-source</h2>
@@ -542,6 +645,35 @@ export default function Home() {
             )}
           </div>
         </article>
+
+        <article className="panel">
+          <div className="panelHeader">
+            <h2>Interactifs de la map</h2>
+            <span className="badge">{interactives.length}</span>
+          </div>
+          <div className="interactiveList">
+            {interactives.length === 0 ? (
+              <p className="muted">
+                Ils se chargeront automatiquement dès qu’un map_id sûr sera reçu.
+              </p>
+            ) : (
+              interactives.slice(0, 40).map((item, index) => (
+                <div
+                  className="interactiveRow"
+                  key={[
+                    item.cell_id ?? "x",
+                    item.interaction_id ?? "x",
+                    index,
+                  ].join("-")}
+                >
+                  <b>cell {item.cell_id ?? "—"}</b>
+                  <span>gfx {item.gfx_id ?? "—"}</span>
+                  <span>interaction {item.interaction_id ?? "—"}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </article>
       </section>
 
       <section className="statusGrid lower">
@@ -574,46 +706,17 @@ export default function Home() {
           </div>
         </article>
 
-        <article className="panel">
+        <article className="panel eventPanelEmbedded">
           <div className="panelHeader">
-            <h2>Interactifs de la map</h2>
-            <span className="badge">{interactives.length}</span>
+            <h2>Dernier événement unifié</h2>
+            <span className="badge">{state.last_event.source}</span>
           </div>
-          <div className="interactiveList">
-            {interactives.length === 0 ? (
-              <p className="muted">
-                Ils se chargeront automatiquement dès qu’un map_id sûr sera reçu.
-              </p>
-            ) : (
-              interactives.slice(0, 40).map((item, index) => (
-                <div
-                  className="interactiveRow"
-                  key={[
-                    item.cell_id ?? "x",
-                    item.interaction_id ?? "x",
-                    index,
-                  ].join("-")}
-                >
-                  <b>cell {item.cell_id ?? "—"}</b>
-                  <span>gfx {item.gfx_id ?? "—"}</span>
-                  <span>interaction {item.interaction_id ?? "—"}</span>
-                </div>
-              ))
-            )}
-          </div>
+          <pre>
+            {state.last_event.value
+              ? JSON.stringify(state.last_event.value, null, 2)
+              : "Aucun événement reçu."}
+          </pre>
         </article>
-      </section>
-
-      <section className="panel eventPanel">
-        <div className="panelHeader">
-          <h2>Dernier événement unifié</h2>
-          <span className="badge">{state.last_event.source}</span>
-        </div>
-        <pre>
-          {state.last_event.value
-            ? JSON.stringify(state.last_event.value, null, 2)
-            : "Aucun événement reçu."}
-        </pre>
       </section>
     </main>
   );
