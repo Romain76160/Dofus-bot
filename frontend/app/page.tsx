@@ -384,10 +384,10 @@ export default function Home() {
     <main className="shell">
       <header className="topbar">
         <div>
-          <span className="kicker">DOFUS HYBRID OBSERVER · v0.7</span>
+          <span className="kicker">DOFUS HYBRID OBSERVER · v0.8</span>
           <h1>Diagnostic temps réel</h1>
           <p>
-            Capture TCP live + réseau décodé + données locales + vision ciblée
+            Auto-détection TCP + capture live + données locales + vision ciblée
             + fusion multi-source.
           </p>
         </div>

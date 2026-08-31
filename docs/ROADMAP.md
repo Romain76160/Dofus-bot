@@ -19,7 +19,10 @@
 - [x] Batching ordonné live -> décodeur brut
 - [x] Heartbeat et métriques du captureur live
 - [x] Déduplication courte des retransmissions exactes
-- [ ] Tester le pont sur une session réelle du serveur privé
+- [x] Auto-détection des endpoints TCP du processus Dofus
+- [x] Sélection prudente + gestion des connexions ambiguës
+- [x] Mode automatique sans IP/port
+- [ ] Tester le pont sur une session réelle d'un serveur privé autorisé
 - [ ] Ajouter un reassembleur TCP si les segments hors ordre perturbent le framing
 - [ ] Compléter le profil spécifique à la build cible avec les messages réels
 - [ ] Générer/valider automatiquement un profil après mise à jour du client
