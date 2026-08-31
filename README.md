@@ -62,3 +62,43 @@ Afficher en temps réel dans le dashboard :
 - provenance de chaque donnée
 
 Aucun clic automatique n'est requis pour ce premier jalon.
+
+
+## Identifier la build locale
+
+Depuis le dossier `backend`, lance le diagnostic en donnant le dossier racine du client :
+
+```powershell
+python tools/diagnose_client.py "C:\chemin\vers\Dofus"
+```
+
+Le script est en lecture seule. Il cherche notamment :
+
+- `GameAssembly.dll`
+- `global-metadata.dat`
+- `StreamingAssets/Content`
+- les bundles `mapdata_assets_world_*.bundle`
+
+Il affiche un rapport JSON avec les chemins, tailles et SHA-256. Ce rapport permet de savoir précisément à quelle build le profil réseau doit être associé.
+
+## Endpoints d'observation
+
+```text
+GET  /health
+GET  /api/state
+GET  /api/network/status
+POST /api/network/replay-hex
+GET  /api/game-data/status
+GET  /api/game-data/maps/{map_id}/interactions
+WS   /ws
+```
+
+### maps.sqlite
+
+Le backend reconnaît le schéma `maps.sqlite` produit par `ledouxm/dofus-sqlite` :
+
+```text
+map_interactions(mapId, worldId, gfxId, cellId, interactionId)
+```
+
+Place la base à l'emplacement configuré par `GAME_DATA_DB_PATH`.
