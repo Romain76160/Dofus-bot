@@ -17,6 +17,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
+      - run: python -m compileall -q app tools
       - run: pytest -q
 
   frontend:
@@ -30,4 +31,5 @@ jobs:
         with:
           node-version: "22"
       - run: npm install
+      - run: npx tsc --noEmit
       - run: npm run build
