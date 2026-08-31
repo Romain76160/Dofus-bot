@@ -14,14 +14,18 @@ class Observation(BaseModel):
     value: Any
     source: SourceName
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
-    observed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    observed_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
 
 
 class StateField(BaseModel):
     value: Any = None
     source: SourceName = "system"
     confidence: float = 0.0
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
 
 
 class GameState(BaseModel):
@@ -30,5 +34,10 @@ class GameState(BaseModel):
     in_fight: StateField = Field(default_factory=StateField)
     my_turn: StateField = Field(default_factory=StateField)
     popup_visible: StateField = Field(default_factory=StateField)
-    interactives: StateField = Field(default_factory=lambda: StateField(value=[]))
+    interactives: StateField = Field(
+        default_factory=lambda: StateField(value=[])
+    )
+    network_connected: StateField = Field(
+        default_factory=lambda: StateField(value=False)
+    )
     last_event: StateField = Field(default_factory=StateField)
