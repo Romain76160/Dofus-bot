@@ -7,6 +7,12 @@ from pydantic import BaseModel, Field
 
 
 SourceName = Literal["network", "vision", "game_data", "manual", "system"]
+ConflictReason = Literal[
+    "older_observation",
+    "lower_confidence",
+    "lower_source_priority",
+    "source_disagreement",
+]
 
 
 class Observation(BaseModel):
@@ -26,6 +32,19 @@ class StateField(BaseModel):
     updated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
+
+
+class ConflictRecord(BaseModel):
+    key: str
+    current_value: Any
+    current_source: SourceName
+    current_confidence: float
+    incoming_value: Any
+    incoming_source: SourceName
+    incoming_confidence: float
+    observed_at: datetime
+    reason: ConflictReason
+    accepted: bool
 
 
 class GameState(BaseModel):
