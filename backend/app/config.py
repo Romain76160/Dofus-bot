@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     network_observer_enabled: bool = False
     capture_fps: int = 2
     game_data_db_path: str = "../data/maps.sqlite"
+    network_profile_path: str = "config/network-profile.json"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
