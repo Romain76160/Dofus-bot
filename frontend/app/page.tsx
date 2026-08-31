@@ -19,6 +19,19 @@ type GameState = {
   last_event: StateField;
 };
 
+type NetworkStatus = {
+  enabled: boolean;
+  profile_build: string;
+  layouts: Record<string, unknown>;
+};
+
+type GameDataStatus = {
+  path: string;
+  exists: boolean;
+  map_interactions_ready: boolean;
+  map_interactions_columns: string[];
+};
+
 const emptyField: StateField = {
   value: null,
   source: "system",
@@ -66,12 +79,38 @@ function FieldCard({
   );
 }
 
+function InfoCard({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <article className="card">
+      <span className="eyebrow">{label}</span>
+      <strong className="value">{value}</strong>
+      <div className="meta">
+        <span>{detail}</span>
+      </div>
+    </article>
+  );
+}
+
 export default function Home() {
   const [state, setState] = useState<GameState>(initialState);
   const [connected, setConnected] = useState(false);
+  const [network, setNetwork] = useState<NetworkStatus | null>(null);
+  const [gameData, setGameData] = useState<GameDataStatus | null>(null);
 
   const wsUrl = useMemo(
     () => process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws",
+    [],
+  );
+  const apiUrl = useMemo(
+    () => process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000",
     [],
   );
 
@@ -90,6 +129,39 @@ export default function Home() {
 
     return () => ws.close();
   }, [wsUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshStatus = async () => {
+      try {
+        const [networkResponse, dataResponse] = await Promise.all([
+          fetch(`${apiUrl}/api/network/status`, { cache: "no-store" }),
+          fetch(`${apiUrl}/api/game-data/status`, { cache: "no-store" }),
+        ]);
+
+        if (!cancelled && networkResponse.ok) {
+          setNetwork(await networkResponse.json());
+        }
+        if (!cancelled && dataResponse.ok) {
+          setGameData(await dataResponse.json());
+        }
+      } catch {
+        if (!cancelled) {
+          setNetwork(null);
+          setGameData(null);
+        }
+      }
+    };
+
+    void refreshStatus();
+    const interval = window.setInterval(refreshStatus, 3000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [apiUrl]);
 
   return (
     <main className="shell">
@@ -116,6 +188,24 @@ export default function Home() {
       </section>
 
       <section className="grid">
+        <InfoCard
+          label="Profil réseau"
+          value={network?.profile_build ?? "Non chargé"}
+          detail={network?.enabled ? "observer activé" : "observer passif / replay"}
+        />
+        <InfoCard
+          label="Maps SQLite"
+          value={gameData?.map_interactions_ready ? "Prêt" : "Non chargé"}
+          detail={gameData?.path ?? "aucune base"}
+        />
+        <InfoCard
+          label="WebSocket"
+          value={connected ? "Connecté" : "Hors ligne"}
+          detail="état temps réel"
+        />
+      </section>
+
+      <section className="grid" style={{ marginTop: 14 }}>
         <FieldCard label="Map ID" field={state.map_id} />
         <FieldCard label="Player cell" field={state.player_cell} />
         <FieldCard label="Combat" field={state.in_fight} />
