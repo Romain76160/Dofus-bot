@@ -1,14 +1,15 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.game_data import router as game_data_router
 from app.api.network import router as network_router
+from app.api.vision import router as vision_router
 from app.api.ws import router as ws_router
 from app.config import settings
 from app.state.models import Observation
 from app.state.store import store
 
-app = FastAPI(title="Dofus Hybrid Observer", version="0.2.0")
+app = FastAPI(title="Dofus Hybrid Observer", version="0.5.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,12 +22,14 @@ app.add_middleware(
 app.include_router(ws_router)
 app.include_router(game_data_router)
 app.include_router(network_router)
+app.include_router(vision_router)
 
 
 @app.get("/health")
 async def health() -> dict:
     return {
         "status": "ok",
+        "version": "0.5.0",
         "vision_enabled": settings.vision_enabled,
         "network_observer_enabled": settings.network_observer_enabled,
         "allow_input": settings.allow_input,
@@ -36,6 +39,13 @@ async def health() -> dict:
 @app.get("/api/state")
 async def get_state():
     return await store.snapshot()
+
+
+@app.get("/api/observations")
+async def observation_history(
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    return await store.history(limit)
 
 
 @app.post("/api/debug/observation")
