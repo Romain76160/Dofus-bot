@@ -11,7 +11,7 @@ from app.observer.network.service import network_event_service
 from app.state.models import Observation
 from app.state.store import store
 
-app = FastAPI(title="Dofus Hybrid Observer", version="0.7.0")
+app = FastAPI(title="Dofus Hybrid Observer", version="0.8.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,7 +34,7 @@ async def health() -> dict:
     live_capture = await network_event_service.live_capture_status()
     return {
         "status": "ok",
-        "version": "0.7.0",
+        "version": "0.8.0",
         "vision_enabled": settings.vision_enabled,
         "network_observer_enabled": settings.network_observer_enabled,
         "allow_input": settings.allow_input,
