@@ -4,3 +4,4 @@ pydantic-settings==2.10.1
 mss==10.1.0
 numpy==2.3.2
 opencv-python-headless==4.12.0.88
+pytest==8.4.1
