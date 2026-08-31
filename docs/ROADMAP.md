@@ -15,7 +15,13 @@
 - [x] Ingestion d'événements JSON déjà décodés
 - [x] Discovery conservateur map_id / player_cell
 - [x] Journal des événements récents
-- [ ] Brancher un décodeur live autorisé spécifique à la build cible
+- [x] Pont TCP live Windows en mode WinDivert SNIFF
+- [x] Batching ordonné live -> décodeur brut
+- [x] Heartbeat et métriques du captureur live
+- [x] Déduplication courte des retransmissions exactes
+- [ ] Tester le pont sur une session réelle du serveur privé
+- [ ] Ajouter un reassembleur TCP si les segments hors ordre perturbent le framing
+- [ ] Compléter le profil spécifique à la build cible avec les messages réels
 - [ ] Générer/valider automatiquement un profil après mise à jour du client
 
 ## Étape 2 — Données locales
