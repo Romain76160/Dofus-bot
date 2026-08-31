@@ -42,9 +42,11 @@
 - [x] Historique borné des observations
 - [x] Dashboard multi-source
 - [x] Reconnexion WebSocket automatique
-- [ ] Journal explicite des contradictions entre sources
-- [ ] Politique de priorité configurable par champ
-- [ ] Métriques de latence et fraîcheur des sources
+- [x] Journal explicite des contradictions entre sources
+- [x] Politique de priorité configurable par champ
+- [x] Métriques de latence et fraîcheur des sources
+- [x] Rejet explicite des observations anciennes / moins prioritaires
+- [ ] Persistance optionnelle des diagnostics entre redémarrages
 
 ## Étape 5 — Validation
 - [ ] Fixture de replay issue d'une session autorisée

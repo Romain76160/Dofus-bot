@@ -83,6 +83,48 @@ type VisionStatus = {
   } | null;
 };
 
+type FieldHealth = {
+  source: string;
+  confidence: number;
+  updated_at: string;
+  age_seconds: number;
+  stale: boolean;
+  has_value: boolean;
+  priority_rank: number;
+};
+
+type DiagnosticsHealth = {
+  generated_at: string;
+  stale_after_seconds: number;
+  stale_fields: string[];
+  healthy_fields: string[];
+  fields: Record<string, FieldHealth>;
+  sources: Record<
+    string,
+    {
+      observation_count: number;
+      last_observed_at: string | null;
+      age_seconds: number | null;
+    }
+  >;
+  observation_count: number;
+  conflict_count: number;
+  rejected_conflict_count: number;
+};
+
+type Conflict = {
+  key: string;
+  current_value: unknown;
+  current_source: string;
+  current_confidence: number;
+  incoming_value: unknown;
+  incoming_source: string;
+  incoming_confidence: number;
+  observed_at: string;
+  reason: string;
+  accepted: boolean;
+};
+
 const field = <T,>(value: T | null = null): StateField<T> => ({
   value,
   source: "system",
@@ -120,6 +162,13 @@ function relativeTime(iso: string): string {
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return "il y a " + minutes + " min";
   return new Date(iso).toLocaleTimeString();
+}
+
+function displayValue(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "boolean") return value ? "Oui" : "Non";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
 }
 
 function FieldCard({
@@ -162,6 +211,30 @@ function FieldCard({
   );
 }
 
+function CountCard({
+  label,
+  value,
+  detail,
+  warning = false,
+}: {
+  label: string;
+  value: number;
+  detail: string;
+  warning?: boolean;
+}) {
+  return (
+    <article className={warning ? "metric metricWarning" : "metric"}>
+      <div className="metricTop">
+        <span>{label}</span>
+      </div>
+      <strong>{value}</strong>
+      <div className="metricMeta">
+        <span>{detail}</span>
+      </div>
+    </article>
+  );
+}
+
 export default function Home() {
   const [state, setState] = useState<GameState>(initialState);
   const [connected, setConnected] = useState(false);
@@ -169,6 +242,8 @@ export default function Home() {
   const [debug, setDebug] = useState<NetworkDebug>(initialDebug);
   const [gameData, setGameData] = useState<GameDataStatus | null>(null);
   const [vision, setVision] = useState<VisionStatus | null>(null);
+  const [health, setHealth] = useState<DiagnosticsHealth | null>(null);
+  const [conflicts, setConflicts] = useState<Conflict[]>([]);
 
   const apiUrl = useMemo(
     () => process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000",
@@ -232,6 +307,10 @@ export default function Home() {
           fetch(apiUrl + "/api/network/debug", { cache: "no-store" }),
           fetch(apiUrl + "/api/game-data/status", { cache: "no-store" }),
           fetch(apiUrl + "/api/vision/status", { cache: "no-store" }),
+          fetch(apiUrl + "/api/diagnostics/health", { cache: "no-store" }),
+          fetch(apiUrl + "/api/diagnostics/conflicts?limit=12", {
+            cache: "no-store",
+          }),
         ]);
 
         if (stopped) return;
@@ -240,11 +319,15 @@ export default function Home() {
         if (responses[1].ok) setDebug(await responses[1].json());
         if (responses[2].ok) setGameData(await responses[2].json());
         if (responses[3].ok) setVision(await responses[3].json());
+        if (responses[4].ok) setHealth(await responses[4].json());
+        if (responses[5].ok) setConflicts(await responses[5].json());
       } catch {
         if (!stopped) {
           setNetwork(null);
           setGameData(null);
           setVision(null);
+          setHealth(null);
+          setConflicts([]);
         }
       }
     };
@@ -261,14 +344,19 @@ export default function Home() {
   const interactives = Array.isArray(state.interactives.value)
     ? state.interactives.value
     : [];
+  const fieldHealth = health ? Object.entries(health.fields) : [];
+  const sourceHealth = health ? Object.entries(health.sources) : [];
 
   return (
     <main className="shell">
       <header className="topbar">
         <div>
-          <span className="kicker">DOFUS HYBRID OBSERVER · v0.5</span>
+          <span className="kicker">DOFUS HYBRID OBSERVER · v0.6</span>
           <h1>Diagnostic temps réel</h1>
-          <p>Réseau décodé + profil brut + données locales + vision ciblée.</p>
+          <p>
+            Réseau décodé + profil brut + données locales + vision ciblée +
+            fusion multi-source.
+          </p>
         </div>
         <div className={connected ? "connection online" : "connection"}>
           <span />
@@ -276,11 +364,19 @@ export default function Home() {
         </div>
       </header>
 
-      <section className="metrics">
+      <section className="metrics metricsFive">
         <FieldCard label="Map ID" stateField={state.map_id} />
         <FieldCard label="Cellule joueur" stateField={state.player_cell} />
         <FieldCard label="Réseau" stateField={state.network_connected} />
         <FieldCard label="Interactifs" stateField={state.interactives} />
+        <CountCard
+          label="Contradictions"
+          value={health?.conflict_count ?? 0}
+          detail={
+            String(health?.rejected_conflict_count ?? 0) + " rejetée(s)"
+          }
+          warning={(health?.conflict_count ?? 0) > 0}
+        />
       </section>
 
       <section className="statusGrid">
@@ -360,6 +456,87 @@ export default function Home() {
                       {candidate.auto_apply ? "AUTO" : "DEBUG"}
                     </span>
                   </div>
+                </div>
+              ))
+            )}
+          </div>
+        </article>
+      </section>
+
+      <section className="statusGrid">
+        <article className="panel">
+          <div className="panelHeader">
+            <h2>Fraîcheur des champs</h2>
+            <span className="badge">
+              seuil {health?.stale_after_seconds ?? "—"} s
+            </span>
+          </div>
+          <div className="healthList">
+            {fieldHealth.map(([name, item]) => (
+              <div className="healthRow" key={name}>
+                <div>
+                  <b>{name}</b>
+                  <small>
+                    {item.source} · priorité {item.priority_rank}
+                  </small>
+                </div>
+                <div className="healthStatus">
+                  <strong>{item.age_seconds.toFixed(1)} s</strong>
+                  <span className={item.stale ? "stale" : "fresh"}>
+                    {item.stale ? "STALE" : "FRESH"}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="sourceFreshness">
+            {sourceHealth.map(([source, item]) => (
+              <div key={source}>
+                <span>{source}</span>
+                <b>
+                  {item.age_seconds === null
+                    ? "—"
+                    : item.age_seconds.toFixed(1) + " s"}
+                </b>
+                <small>{item.observation_count} obs.</small>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="panel">
+          <div className="panelHeader">
+            <h2>Contradictions multi-source</h2>
+            <span className="badge">{conflicts.length} récente(s)</span>
+          </div>
+          <div className="conflictList">
+            {conflicts.length === 0 ? (
+              <p className="muted">
+                Aucun désaccord entre sources observé dans l’historique.
+              </p>
+            ) : (
+              conflicts.map((conflict, index) => (
+                <div className="conflictRow" key={conflict.observed_at + index}>
+                  <div className="conflictTitle">
+                    <b>{conflict.key}</b>
+                    <span className={conflict.accepted ? "fresh" : "stale"}>
+                      {conflict.accepted ? "ACCEPTÉ" : "REJETÉ"}
+                    </span>
+                  </div>
+                  <div className="conflictValues">
+                    <span>
+                      {conflict.current_source}:{" "}
+                      <b>{displayValue(conflict.current_value)}</b>
+                    </span>
+                    <span>→</span>
+                    <span>
+                      {conflict.incoming_source}:{" "}
+                      <b>{displayValue(conflict.incoming_value)}</b>
+                    </span>
+                  </div>
+                  <small>
+                    {conflict.reason} · {relativeTime(conflict.observed_at)}
+                  </small>
                 </div>
               ))
             )}
