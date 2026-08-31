@@ -20,3 +20,13 @@ async def map_interactions(map_id: int) -> dict:
         "count": len(interactions),
         "interactions": interactions,
     }
+
+
+@router.get("/maps/{map_id}/interactives")
+async def map_interactives(map_id: int) -> dict:
+    interactions = repository.normalized_interactions_for_map(map_id)
+    return {
+        "map_id": map_id,
+        "count": len(interactions),
+        "interactives": interactions,
+    }
