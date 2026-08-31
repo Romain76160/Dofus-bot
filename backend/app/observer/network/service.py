@@ -10,7 +10,12 @@ from app.state.models import Observation
 from app.state.store import store
 
 from .discovery import discover_candidates
-from .models import DecodedNetworkEvent, NetworkDebugState
+from .models import (
+    DecodedNetworkEvent,
+    LiveCaptureHeartbeat,
+    LiveCaptureStatus,
+    NetworkDebugState,
+)
 
 
 class NetworkEventService:
@@ -23,13 +28,18 @@ class NetworkEventService:
             maxlen=history_size or settings.network_history_size
         )
         self._repository = GameDataRepository(settings.game_data_db_path)
+        self._live_capture = LiveCaptureStatus()
 
     @staticmethod
-    def _observed_at(event: DecodedNetworkEvent) -> datetime:
+    def _aware(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    @classmethod
+    def _observed_at(cls, event: DecodedNetworkEvent) -> datetime:
         observed_at = event.captured_at or datetime.now(timezone.utc)
-        if observed_at.tzinfo is None:
-            observed_at = observed_at.replace(tzinfo=timezone.utc)
-        return observed_at
+        return cls._aware(observed_at)
 
     async def _apply_interactives(self, map_id: int) -> int:
         rows = self._repository.interactions_for_map(map_id)
@@ -127,6 +137,65 @@ class NetworkEventService:
                 1 for candidate in candidates if not candidate.auto_apply
             )
             return self._debug.model_copy(deep=True)
+
+    async def live_capture_heartbeat(
+        self,
+        heartbeat: LiveCaptureHeartbeat,
+    ) -> LiveCaptureStatus:
+        now = datetime.now(timezone.utc)
+        reported_at = self._aware(heartbeat.sent_at)
+        started_at = self._aware(heartbeat.started_at)
+
+        async with self._lock:
+            self._live_capture = LiveCaptureStatus(
+                active=True,
+                session_id=heartbeat.session_id,
+                server_host=heartbeat.server_host,
+                resolved_addresses=heartbeat.resolved_addresses,
+                server_port=heartbeat.server_port,
+                capture_filter=heartbeat.capture_filter,
+                capture_mode=heartbeat.capture_mode,
+                platform=heartbeat.platform,
+                tool_version=heartbeat.tool_version,
+                started_at=started_at,
+                reported_at=reported_at,
+                last_heartbeat_at=now,
+                heartbeat_age_seconds=0.0,
+                packets_seen=heartbeat.packets_seen,
+                payload_packets=heartbeat.payload_packets,
+                chunks_forwarded=heartbeat.chunks_forwarded,
+                bytes_forwarded=heartbeat.bytes_forwarded,
+                duplicates_skipped=heartbeat.duplicates_skipped,
+                queue_drops=heartbeat.queue_drops,
+                forward_errors=heartbeat.forward_errors,
+                last_error=heartbeat.last_error,
+            )
+            status = self._live_capture.model_copy(deep=True)
+
+        await store.apply(
+            Observation(
+                key="network_connected",
+                value=True,
+                source="network",
+                confidence=1.0,
+                observed_at=now,
+            )
+        )
+        return status
+
+    async def live_capture_status(self) -> LiveCaptureStatus:
+        now = datetime.now(timezone.utc)
+
+        async with self._lock:
+            status = self._live_capture.model_copy(deep=True)
+            if status.last_heartbeat_at is None:
+                return status
+
+            last_heartbeat_at = self._aware(status.last_heartbeat_at)
+            age = max(0.0, (now - last_heartbeat_at).total_seconds())
+            status.heartbeat_age_seconds = round(age, 3)
+            status.active = age <= settings.live_capture_heartbeat_ttl_seconds
+            return status
 
     async def recent_events(self, limit: int = 50) -> list[dict]:
         limit = max(1, min(limit, self._history.maxlen or limit))
