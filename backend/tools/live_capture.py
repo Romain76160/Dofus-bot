@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Passive Windows TCP capture -> local Dofus observer backend.
 
-This tool is intended for a private server where capture/automation is
-explicitly authorized. It uses WinDivert SNIFF mode, so matching packets are
-observed without being removed from the network stack.
+For private servers where capture/automation is explicitly authorized.
+The capture layer uses WinDivert SNIFF mode and never modifies packets.
+
+v0.8 can auto-discover the remote TCP endpoint used by a local Dofus process,
+so host/port do not need to be hard-coded for a compatible private server.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import ctypes
 import json
 import platform
 import sys
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -21,6 +24,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from app.observer.network.endpoint_discovery import (
+    EndpointCandidate,
+    discover_process_tcp_endpoints,
+    select_endpoint,
+)
 from app.observer.network.live_capture import (
     RetransmitDeduplicator,
     SegmentIdentity,
@@ -30,7 +38,8 @@ from app.observer.network.live_capture import (
     resolve_ipv4_addresses,
 )
 
-TOOL_VERSION = "0.7.0"
+TOOL_VERSION = "0.8.0"
+DEFAULT_PROCESS_NAMES = ["Dofus.exe", "Dofus"]
 
 
 @dataclass(slots=True)
@@ -49,6 +58,16 @@ class Counters:
     queue_drops: int = 0
     forward_errors: int = 0
     last_error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureTarget:
+    server_host: str | None
+    addresses: list[str]
+    server_port: int
+    source: str
+    process_name: str | None = None
+    pid: int | None = None
 
 
 def is_windows_admin() -> bool:
@@ -99,21 +118,140 @@ async def post_json(
     return await asyncio.to_thread(post_json_sync, url, payload, timeout)
 
 
+def format_candidate(index: int, candidate: EndpointCandidate) -> str:
+    return (
+        f"[{index}] {candidate.host}:{candidate.port} "
+        f"pid={candidate.pid} process={candidate.process_name} "
+        f"status={candidate.status}"
+    )
+
+
+def print_candidates(candidates: list[EndpointCandidate]) -> None:
+    if not candidates:
+        print("[discovery] no established TCP endpoint found")
+        return
+
+    print("[discovery] candidate endpoints:")
+    for index, candidate in enumerate(candidates):
+        print("  " + format_candidate(index, candidate))
+
+
+def discover_target_once(
+    *,
+    process_names: list[str],
+    candidate_index: int | None,
+) -> tuple[CaptureTarget | None, list[EndpointCandidate], bool]:
+    candidates = discover_process_tcp_endpoints(process_names)
+    selected, ranked, ambiguous = select_endpoint(candidates)
+
+    if candidate_index is not None:
+        if candidate_index < 0 or candidate_index >= len(ranked):
+            raise RuntimeError(
+                f"candidate index {candidate_index} is out of range "
+                f"(found {len(ranked)} candidate(s))"
+            )
+        selected = ranked[candidate_index]
+        ambiguous = False
+
+    if selected is None:
+        return None, ranked, ambiguous
+
+    return (
+        CaptureTarget(
+            server_host=selected.host,
+            addresses=[selected.host],
+            server_port=selected.port,
+            source="process-auto",
+            process_name=selected.process_name,
+            pid=selected.pid,
+        ),
+        ranked,
+        False,
+    )
+
+
+def resolve_target(args: argparse.Namespace) -> CaptureTarget:
+    if args.server_port is not None:
+        addresses = (
+            resolve_ipv4_addresses(args.server_host)
+            if args.server_host
+            else []
+        )
+        if args.server_host and not addresses:
+            raise RuntimeError(
+                f"no IPv4 address found for {args.server_host!r}"
+            )
+
+        return CaptureTarget(
+            server_host=args.server_host,
+            addresses=addresses,
+            server_port=args.server_port,
+            source="manual",
+        )
+
+    process_names = args.process_name or DEFAULT_PROCESS_NAMES
+    deadline = (
+        None
+        if args.discover_timeout == 0
+        else time.monotonic() + args.discover_timeout
+    )
+
+    last_ranked: list[EndpointCandidate] = []
+    last_ambiguous = False
+
+    while True:
+        target, ranked, ambiguous = discover_target_once(
+            process_names=process_names,
+            candidate_index=args.candidate_index,
+        )
+        last_ranked = ranked
+        last_ambiguous = ambiguous
+
+        if args.list_endpoints:
+            print_candidates(ranked)
+            raise SystemExit(0)
+
+        if target is not None:
+            return target
+
+        if ambiguous:
+            print_candidates(ranked)
+            raise RuntimeError(
+                "several Dofus TCP endpoints are equally plausible. "
+                "Re-run with --candidate-index N, or provide "
+                "--server-host/--server-port explicitly."
+            )
+
+        if deadline is not None and time.monotonic() >= deadline:
+            print_candidates(last_ranked)
+            names = ", ".join(process_names)
+            raise RuntimeError(
+                "no established TCP endpoint was discovered for "
+                f"{names}. Start/connect the authorized private-server client "
+                "or provide --server-host/--server-port explicitly."
+            )
+
+        time.sleep(args.discover_poll)
+
+    # Defensive fallback for type checkers.
+    if last_ambiguous:
+        raise RuntimeError("endpoint discovery remained ambiguous")
+    raise RuntimeError("endpoint discovery failed")
+
+
 def heartbeat_payload(
     *,
     session_id: str,
-    server_host: str | None,
-    addresses: list[str],
-    server_port: int,
+    target: CaptureTarget,
     capture_filter: str,
     started_at: datetime,
     counters: Counters,
 ) -> dict[str, Any]:
     return {
         "session_id": session_id,
-        "server_host": server_host,
-        "resolved_addresses": addresses,
-        "server_port": server_port,
+        "server_host": target.server_host,
+        "resolved_addresses": target.addresses,
+        "server_port": target.server_port,
         "capture_filter": capture_filter,
         "capture_mode": "windivert_sniff",
         "platform": platform.platform(),
@@ -208,9 +346,7 @@ async def heartbeat_loop(
     *,
     heartbeat_url: str,
     session_id: str,
-    server_host: str | None,
-    addresses: list[str],
-    server_port: int,
+    target: CaptureTarget,
     capture_filter: str,
     started_at: datetime,
     counters: Counters,
@@ -219,9 +355,7 @@ async def heartbeat_loop(
     while True:
         payload = heartbeat_payload(
             session_id=session_id,
-            server_host=server_host,
-            addresses=addresses,
-            server_port=server_port,
+            target=target,
             capture_filter=capture_filter,
             started_at=started_at,
             counters=counters,
@@ -241,8 +375,7 @@ async def heartbeat_loop(
 async def capture_loop(
     *,
     capture_filter: str,
-    server_port: int,
-    addresses: list[str],
+    target: CaptureTarget,
     queue: asyncio.Queue[CapturedChunk],
     counters: Counters,
     dedup_window_seconds: float,
@@ -255,7 +388,7 @@ async def capture_loop(
             "pip install -r requirements-live-windows.txt"
         ) from exc
 
-    address_set = set(addresses)
+    address_set = set(target.addresses)
     deduplicator = RetransmitDeduplicator(
         window_seconds=dedup_window_seconds
     )
@@ -278,7 +411,7 @@ async def capture_loop(
                     src_port=int(packet.src_port),
                     dst_addr=str(packet.dst_addr),
                     dst_port=int(packet.dst_port),
-                    server_port=server_port,
+                    server_port=target.server_port,
                     server_addresses=address_set,
                 )
                 if direction is None:
@@ -319,24 +452,29 @@ async def capture_loop(
 
 
 async def run(args: argparse.Namespace) -> None:
-    addresses = (
-        resolve_ipv4_addresses(args.server_host)
-        if args.server_host
-        else []
-    )
-    if args.server_host and not addresses:
+    if args.server_host and args.server_port is None:
         raise RuntimeError(
-            f"no IPv4 address found for {args.server_host!r}"
+            "--server-host requires --server-port"
         )
 
+    target = await asyncio.to_thread(resolve_target, args)
     capture_filter = build_capture_filter(
-        args.server_port,
-        addresses,
+        target.server_port,
+        target.addresses,
     )
 
-    print(f"[config] server host: {args.server_host or '(port only)'}")
-    print(f"[config] resolved IPv4: {', '.join(addresses) or 'none'}")
-    print(f"[config] server port: {args.server_port}")
+    print(f"[config] target source: {target.source}")
+    if target.process_name:
+        print(
+            f"[config] process: {target.process_name} "
+            f"(pid {target.pid})"
+        )
+    print(f"[config] server host: {target.server_host or '(port only)'}")
+    print(
+        f"[config] resolved IPv4: "
+        f"{', '.join(target.addresses) or 'none'}"
+    )
+    print(f"[config] server port: {target.server_port}")
     print(f"[config] backend: {args.base_url}")
     print(f"[config] filter: {capture_filter}")
 
@@ -345,7 +483,7 @@ async def run(args: argparse.Namespace) -> None:
 
     if platform.system() != "Windows":
         raise RuntimeError(
-            "live_capture.py v0.7 targets Windows/WinDivert only"
+            "live_capture.py v0.8 targets Windows/WinDivert only"
         )
     if not is_windows_admin():
         raise RuntimeError(
@@ -364,15 +502,12 @@ async def run(args: argparse.Namespace) -> None:
         maxsize=args.queue_size
     )
 
-    # Fail fast before opening the privileged capture driver.
     try:
         await post_json(
             heartbeat_url,
             heartbeat_payload(
                 session_id=session_id,
-                server_host=args.server_host,
-                addresses=addresses,
-                server_port=args.server_port,
+                target=target,
                 capture_filter=capture_filter,
                 started_at=started_at,
                 counters=counters,
@@ -391,8 +526,7 @@ async def run(args: argparse.Namespace) -> None:
         asyncio.create_task(
             capture_loop(
                 capture_filter=capture_filter,
-                server_port=args.server_port,
-                addresses=addresses,
+                target=target,
                 queue=queue,
                 counters=counters,
                 dedup_window_seconds=args.dedup_window_ms / 1000.0,
@@ -413,9 +547,7 @@ async def run(args: argparse.Namespace) -> None:
             heartbeat_loop(
                 heartbeat_url=heartbeat_url,
                 session_id=session_id,
-                server_host=args.server_host,
-                addresses=addresses,
-                server_port=args.server_port,
+                target=target,
                 capture_filter=capture_filter,
                 started_at=started_at,
                 counters=counters,
@@ -444,20 +576,56 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Passively capture authorized private-server TCP payloads and "
-            "forward them to the local observer backend."
+            "forward them to the local observer backend. With no server "
+            "arguments, the remote endpoint is discovered from Dofus.exe."
         )
     )
     parser.add_argument(
         "--server-port",
         type=int,
-        required=True,
-        help="TCP port used by the private game server",
+        help=(
+            "Explicit TCP server port. If omitted, auto-discovery is used."
+        ),
     )
     parser.add_argument(
         "--server-host",
+        help="Explicit private-server hostname/IPv4.",
+    )
+    parser.add_argument(
+        "--process-name",
+        action="append",
         help=(
-            "Private-server hostname/IPv4. Omit to filter by port only."
+            "Process name used for auto-discovery. Repeat for aliases. "
+            "Defaults to Dofus.exe and Dofus."
         ),
+    )
+    parser.add_argument(
+        "--candidate-index",
+        type=int,
+        help=(
+            "Select one auto-discovered candidate by the index printed by "
+            "--list-endpoints."
+        ),
+    )
+    parser.add_argument(
+        "--list-endpoints",
+        action="store_true",
+        help="List established TCP endpoints for the matching Dofus process.",
+    )
+    parser.add_argument(
+        "--discover-timeout",
+        type=float,
+        default=60.0,
+        help=(
+            "Seconds to wait for a Dofus TCP connection. "
+            "Use 0 to wait indefinitely."
+        ),
+    )
+    parser.add_argument(
+        "--discover-poll",
+        type=float,
+        default=1.0,
+        help="Endpoint discovery polling interval in seconds.",
     )
     parser.add_argument(
         "--base-url",
@@ -497,12 +665,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Resolve host and print the WinDivert filter without capturing",
+        help="Discover target and print the WinDivert filter without capturing",
     )
     args = parser.parse_args()
 
-    if not 1 <= args.server_port <= 65535:
+    if args.server_port is not None and not 1 <= args.server_port <= 65535:
         parser.error("--server-port must be between 1 and 65535")
+    if args.server_host and args.server_port is None:
+        parser.error("--server-host requires --server-port")
+    if args.candidate_index is not None and args.candidate_index < 0:
+        parser.error("--candidate-index must be >= 0")
+    if args.discover_timeout < 0:
+        parser.error("--discover-timeout must be >= 0")
+    if not 0.1 <= args.discover_poll <= 30:
+        parser.error("--discover-poll must be between 0.1 and 30")
     if args.queue_size < 64:
         parser.error("--queue-size must be >= 64")
     if not 1 <= args.batch_size <= 500:
@@ -523,6 +699,8 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\n[live] stopped")
         return 0
+    except SystemExit:
+        raise
     except Exception as exc:
         print(f"[error] {exc}", file=sys.stderr)
         return 2
