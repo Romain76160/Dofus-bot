@@ -24,6 +24,13 @@ class NetworkEventService:
         )
         self._repository = GameDataRepository(settings.game_data_db_path)
 
+    @staticmethod
+    def _observed_at(event: DecodedNetworkEvent) -> datetime:
+        observed_at = event.captured_at or datetime.now(timezone.utc)
+        if observed_at.tzinfo is None:
+            observed_at = observed_at.replace(tzinfo=timezone.utc)
+        return observed_at
+
     async def _apply_interactives(self, map_id: int) -> int:
         rows = self._repository.interactions_for_map(map_id)
         normalized = [
@@ -51,7 +58,7 @@ class NetworkEventService:
 
     async def ingest(self, event: DecodedNetworkEvent) -> NetworkDebugState:
         candidates = discover_candidates(event.payload)
-        observed_at = event.captured_at or datetime.now(timezone.utc)
+        observed_at = self._observed_at(event)
         applied: dict[str, int] = {}
 
         await store.apply(
