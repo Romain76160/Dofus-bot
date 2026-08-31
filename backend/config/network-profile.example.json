@@ -1,0 +1,21 @@
+{
+  "build": "replace-with-your-private-server-client-build",
+  "mappings": {
+    "abc": [
+      {
+        "state_key": "map_id",
+        "path": [1],
+        "decode": "varint",
+        "confidence": 0.98
+      }
+    ],
+    "def": [
+      {
+        "state_key": "player_cell",
+        "path": [2, 1],
+        "decode": "varint",
+        "confidence": 0.98
+      }
+    ]
+  }
+}
